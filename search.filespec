@@ -1,0 +1,12 @@
+{
+    "files": [
+        {
+            "aql": {
+                    "items.find": {
+                        "repo": "npm-local",
+                        "name": { "$match": "*.tgz"}
+                    }
+            }
+        }
+    ]
+}

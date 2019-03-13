@@ -1,0 +1,4 @@
+items.find({
+	"repo": "npm-local",
+        "name": { "$match": "*.tgz"}
+}).include("path","@npm.version", "@npm.name")
