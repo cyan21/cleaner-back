@@ -1,0 +1,4 @@
+items.find({
+	"repo": "docker-elastic-cache",
+        "name": { "$match": "manifest.json"}
+}).include("repo","@docker.manifest","@docker.repoName")

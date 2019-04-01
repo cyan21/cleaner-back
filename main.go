@@ -173,6 +173,7 @@ func parse2(toParse string, tagName string, tagVersion string, verstype string) 
     maj, min, pat, mat := getSemVerFields(pkgVersion)
     switch verstype {
       case "npm" : pkgList[pkgName] = append(pkgList[pkgName], SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat})
+      case "docker" : pkgList[pkgName] = append(pkgList[pkgName], SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat})
       default: log.Fatal("[Parse2] unknow version type")
     }
   } // end for 
@@ -206,7 +207,8 @@ func parse(toParse []byte, tagName string, tagVersion string, verstype string) m
 
     switch verstype {
       case "npm" : pkgList[pkgName] = append(pkgList[pkgName], SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat})
-      default: log.Fatal("[Parse2] unknow version type")
+      case "docker" : pkgList[pkgName] = append(pkgList[pkgName], SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat})
+      default: log.Fatal("[Parse] unknow version type")
     }
 
   } // end for 
@@ -282,20 +284,32 @@ func genAnswer(pkgsList map[string][]Versioning, limit int) map[string]map[strin
   return toSend
 }
 
-func getNPMList(w http.ResponseWriter, r *http.Request) {
+func getArtifactList(w http.ResponseWriter, r *http.Request) {
 
   var pkgs map[string][]Versioning
   limit := stringToInt(mux.Vars(r)["nb"])
+  prop_name := "npm.name"
+  prop_vers := "npm.version"
+  pkg_type := mux.Vars(r)["type"]
+
+//  fmt.Println("type : ", pkg_type)
 
   url := "http://192.168.41.41:8081/artifactory/api/search/aql"
   filename := "list_npm.aql"
   login := "admin" 
   pass := "password" 
 
+  switch(pkg_type) {
+    case "docker": 
+      filename  = "list_docker.aql"
+      prop_name = "docker.repoName"
+      prop_vers = "docker.manifest"
+  }
+
   res := execAQL(url, filename, login, pass)
 //  fmt.Println(string(res))
 
-  pkgs = parse(res, "npm.name", "npm.version", "npm")
+  pkgs = parse(res, prop_name, prop_vers, pkg_type)
 
   sortedPkgs := sortVersion(pkgs)
 
@@ -327,16 +341,15 @@ func test(w http.ResponseWriter, r *http.Request) {
   sortedPkgs := sortVersion(pkgs)
   fmt.Println(sortedPkgs)	
 
-//  json.NewEncoder(w).Encode(genAnswer(sortedPkgs,limit))
+  json.NewEncoder(w).Encode(genAnswer(sortedPkgs,limit))
 
-  json.NewEncoder(w).Encode(genAnswer2(sortedPkgs,limit))
 }
 
 
 func main() {
 
   router := mux.NewRouter()
-  router.HandleFunc("/get/npm/latest/{nb}", getNPMList).Methods("GET")
+  router.HandleFunc("/get/{type}/latest/{nb}", getArtifactList).Methods("GET")
   router.HandleFunc("/test/{nb}", test).Methods("GET")
   log.Fatal(http.ListenAndServe(":8000", router))
 }
