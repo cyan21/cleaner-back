@@ -147,6 +147,43 @@ func callCLI() string {
 
 }
 
+func genFileSpec(repo string, pkgList map[string]map[string][]Versioning ) {
+
+  fmt.Println("[genFileSpec] begin ...")
+
+  filePattern := "{\"files\":[" 
+    
+  for pkgName, versList := range pkgList {
+
+    exclVers := ""
+
+    fmt.Println(pkgName)
+    fmt.Println(versList)
+    
+    if len(versList["keep"]) > 0 {
+
+      // loop in versions to keep/exclude 
+      for i:= 0; i < len(versList["keep"]); i++ {
+          exclVers += "\"*" + versList["keep"][i].Print() + "*\"," 
+      }
+     
+      // add file pattern and remove last coma for excluded versions list
+      filePattern += "{\"pattern\":\"" + repo + "/" + pkgName + "/*.tgz\",\"excludePatterns\": [" + exclVers[:len(exclVers) - 1]  + "]},"
+
+    } // end if
+
+  } // end for
+
+  fmt.Println(filePattern[:len(filePattern)-1] + "]}")
+
+  d1 := []byte(filePattern[:len(filePattern)-1] + "]}")
+  err := ioutil.WriteFile("/tmp/delete.filespec", d1, 0644)
+
+  if err != nil {
+        panic(err)
+  }
+
+}
 
 func parse2(toParse string, tagName string, tagVersion string, verstype string) map[string][]Versioning {
 
@@ -287,33 +324,43 @@ func genAnswer(pkgsList map[string][]Versioning, limit int) map[string]map[strin
 func getArtifactList(w http.ResponseWriter, r *http.Request) {
 
   var pkgs map[string][]Versioning
+  pkgType := mux.Vars(r)["type"]
+  repoName := mux.Vars(r)["repo"]
   limit := stringToInt(mux.Vars(r)["nb"])
-  prop_name := "npm.name"
-  prop_vers := "npm.version"
-  pkg_type := mux.Vars(r)["type"]
 
-//  fmt.Println("type : ", pkg_type)
-
+  var propName string 
+  var propVers string
+  var filename string 
+  
   url := "http://192.168.41.41:8081/artifactory/api/search/aql"
-  filename := "list_npm.aql"
   login := "admin" 
   pass := "password" 
 
-  switch(pkg_type) {
+  switch(pkgType) {
     case "docker": 
-      filename  = "list_docker.aql"
-      prop_name = "docker.repoName"
-      prop_vers = "docker.manifest"
+      filename = "list_docker.aql"
+      propName = "docker.repoName"
+      propVers = "docker.manifest"
+    case "npm": 
+      filename = "list_npm.aql"
+      propName = "npm.name"
+      propVers = "npm.version"
   }
 
   res := execAQL(url, filename, login, pass)
 //  fmt.Println(string(res))
 
-  pkgs = parse(res, prop_name, prop_vers, pkg_type)
-
+  pkgs = parse(res, propName, propVers, pkgType)
   sortedPkgs := sortVersion(pkgs)
+//  fmt.Println(sortedPkgs)
 
-  json.NewEncoder(w).Encode(genAnswer(sortedPkgs,limit))
+  // for UI
+  toSend := genAnswer(sortedPkgs,limit)
+  
+  // for deletion
+  genFileSpec(repoName, toSend)
+
+  json.NewEncoder(w).Encode(toSend)
 }
 
 
@@ -349,7 +396,7 @@ func test(w http.ResponseWriter, r *http.Request) {
 func main() {
 
   router := mux.NewRouter()
-  router.HandleFunc("/get/{type}/latest/{nb}", getArtifactList).Methods("GET")
+  router.HandleFunc("/{type}/{repo}/latest/{nb}", getArtifactList).Methods("GET")
   router.HandleFunc("/test/{nb}", test).Methods("GET")
   log.Fatal(http.ListenAndServe(":8000", router))
 }
