@@ -335,7 +335,7 @@ func genAnswer(pkgsList map[string][]Versioning, limit int) map[string]map[strin
 
 type SizeResult struct {
   Name string 
-  Size int 
+  Size int64
 }
 
 type AQLRes struct {
@@ -346,7 +346,7 @@ func getTagSize(w http.ResponseWriter, r *http.Request) {
 
   var arrRes AQLRes
   var buffer bytes.Buffer
-  size := 0
+  var size int64 = 0
   repo := mux.Vars(r)["repo"]
   img := mux.Vars(r)["image"]
   tag := mux.Vars(r)["tag"]
@@ -362,7 +362,6 @@ func getTagSize(w http.ResponseWriter, r *http.Request) {
 
   fmt.Println(buffer.String())
   toParse, _ := rtManager.Aql(buffer.String()) 
-  fmt.Println("truc")
 
   // extract and add size
   err1 := json.Unmarshal(toParse, &arrRes)
@@ -374,9 +373,13 @@ func getTagSize(w http.ResponseWriter, r *http.Request) {
     size += res.Size
   } 
   
-  sizeMb := float32(size)/(1024*1024)
-  sizeGb := float32(size)/(1024*1024*1024)
-  fmt.Println("size : ", size, " KB, ", sizeMb, " MB, ", sizeGb, " GB")
+  m := make(map[string]string)
+  m["Kb"] = strconv.FormatInt(size,10)
+  m["Mb"] = fmt.Sprintf("%.2f", float64(size)/(1024*1024))
+  m["Gb"] = fmt.Sprintf("%.2f", float64(size)/(1024*1024*1024))
+  fmt.Println("size : ", m["Kb"], " KB, ", m["Mb"], " MB, ", m["Gb"], " GB")
+
+  json.NewEncoder(w).Encode(m)
   
 }
 
