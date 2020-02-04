@@ -91,70 +91,6 @@ func allChecked(arr []bool) bool {
   return true
 }
 
-
-//////////////////////////////:
-
-func execAQL(url string, filename string, login string, pass string) []byte {
-
-    pwd, _ := os.Getwd()
-    file, err := os.Open(pwd + "/" + filename)
-
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer file.Close()
-
-
-    request, err := http.NewRequest("POST", url, file)
-
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    request.Header.Set("Content-Type", "text/plain")
-    request.SetBasicAuth(login, pass)
-
-    client := &http.Client{}
-
-    response, err := client.Do(request)
-
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer response.Body.Close()
-
-    content, err := ioutil.ReadAll(response.Body)
-
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    return content
-
-}
-
-func callCLI() string {
-
-
-	path, err := exec.LookPath("jfrog")
-
-	if err != nil {
-		log.Fatal("installing fortune is in your future")
-	} 
-
-	fmt.Println("JFrog CLI found in" + path )
-	
-	output, err := exec.Command("jfrog", "rt", "search", "--spec=search.filespec").Output()
-
-	if err != nil {
-		log.Fatal("Issue while invoking jfrog CLI")
-	} 
-	
-	//fmt.Println(string(output))	
-	return 	string(output)
-
-}
-
 func genFileSpec(repo string, pkgList map[string]map[string][]Versioning ) {
 
   fmt.Println("[genFileSpec] begin ...")
@@ -333,6 +269,15 @@ func genAnswer(pkgsList map[string][]Versioning, limit int) map[string]map[strin
 /////////////////// REFACTO //////////////////////
 ///////////////////////////////////////////////
 
+type VersResult struct {
+  Repo string 
+  Properties []Propertie
+}
+
+type AQLResVers struct {
+  Results []VersResult
+}
+
 type SizeResult struct {
   Name string 
   Size int64
@@ -457,33 +402,49 @@ func initService() artifactory.ArtifactoryServicesManager {
 
 func getArtifactList(w http.ResponseWriter, r *http.Request) {
 
-  var pkgs map[string][]Versioning
+  var arrRes AQLResVers
+  var buffer bytes.Buffer
+
   pkgType := mux.Vars(r)["type"]
   repoName := mux.Vars(r)["repo"]
-  limit := stringToInt(mux.Vars(r)["nb"])
+  img := mux.Vars(r)["img"]
+//  var pkgs map[string][]Versioning
+//  limit := stringToInt(mux.Vars(r)["nb"])
 
   var propName string 
   var propVers string
-  var filename string 
   
-  url := "http://192.168.41.41:8081/artifactory/api/search/aql"
-  login := "admin" 
-  pass := "password" 
-
   switch(pkgType) {
     case "docker": 
-      filename = "list_docker.aql"
-      propName = "docker.repoName"
-      propVers = "docker.manifest"
+      propName = "@docker.repoName"
+      propVers = "@docker.manifest"
     case "npm": 
-      filename = "list_npm.aql"
       propName = "npm.name"
       propVers = "npm.version"
   }
 
-  res := execAQL(url, filename, login, pass)
-//  fmt.Println(string(res))
+  buffer.WriteString("items.find({\"repo\":\"")
+  buffer.WriteString(repoName)
+  buffer.WriteString("\", \"name\":\"manifest.json\",\"path\": {\"$match\":\"")
+  buffer.WriteString(img)
+  buffer.WriteString("*\"}}).include(\"repo\",\"")
+  buffer.WriteString(propVers)
+  buffer.WriteString("\", \"")
+  buffer.WriteString(propName)
+  buffer.WriteString("\")")
 
+  fmt.Println("AQL: ", buffer.String())
+
+  toParse, _ := rtManager.Aql(buffer.String()) 
+
+  // extract and add size
+  err1 := json.Unmarshal(toParse, &arrRes)
+
+  if err1 != nil {
+    log.Fatal(err1)
+  } 
+  fmt.Println(arrRes)
+/*
   pkgs = parse(res, propName, propVers, pkgType)
   sortedPkgs := sortVersion(pkgs)
 //  fmt.Println(sortedPkgs)
@@ -495,6 +456,7 @@ func getArtifactList(w http.ResponseWriter, r *http.Request) {
   genFileSpec(repoName, toSend)
 
   json.NewEncoder(w).Encode(toSend)
+*/
 }
 
 
@@ -541,7 +503,7 @@ func main() {
     fmt.Println(resultItems)
   }
   
-//  router.HandleFunc("/{type}/{repo}/latest/{nb}", getArtifactList).Methods("GET")
+  router.HandleFunc("/{type}/{repo}/{img}/latest/{nb}", getArtifactList).Methods("GET")
 //  router.HandleFunc("/test/{nb}", test).Methods("GET")
   router.HandleFunc("/docker/{repo}/{image}/{tag}/size", getTagSize).Methods("GET")
 //  router.HandleFunc("/docker/{image}/size", getImageSize).Methods("GET")
