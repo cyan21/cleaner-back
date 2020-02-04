@@ -11,7 +11,15 @@ import (
 	"io/ioutil"
 	"strconv"
 	"strings"
+  customlog "github.com/jfrog/jfrog-client-go/utils/log"
+  "github.com/jfrog/jfrog-client-go/artifactory"
+  "github.com/jfrog/jfrog-client-go/artifactory/services"
+//  utils "github.com/jfrog/jfrog-client-go/artifactory/services/utils"
+  "github.com/jfrog/jfrog-client-go/artifactory/auth"
+  "bytes"
 )
+
+var rtManager artifactory.ArtifactoryServicesManager
 
 type Versioning = versioning.Versioning
 type SemVer20 = versioning.SemVer20
@@ -321,6 +329,129 @@ func genAnswer(pkgsList map[string][]Versioning, limit int) map[string]map[strin
   return toSend
 }
 
+///////////////////////////////////////////////
+/////////////////// REFACTO //////////////////////
+///////////////////////////////////////////////
+
+type SizeResult struct {
+  Name string 
+  Size int 
+}
+
+type AQLRes struct {
+  Results []SizeResult
+}
+
+func getTagSize(w http.ResponseWriter, r *http.Request) {
+
+  var arrRes AQLRes
+  var buffer bytes.Buffer
+  size := 0
+  repo := mux.Vars(r)["repo"]
+  img := mux.Vars(r)["image"]
+  tag := mux.Vars(r)["tag"]
+
+  // run AQL to get all items size in folder (image tag)
+  buffer.WriteString("items.find({\"repo\":\"")
+  buffer.WriteString(repo)
+  buffer.WriteString("\", \"path\":\"")
+  buffer.WriteString(img)
+  buffer.WriteString("/")
+  buffer.WriteString(tag)
+  buffer.WriteString("\"}).include(\"name\",\"size\")")
+
+  fmt.Println(buffer.String())
+  toParse, _ := rtManager.Aql(buffer.String()) 
+  fmt.Println("truc")
+
+  // extract and add size
+  err1 := json.Unmarshal(toParse, &arrRes)
+
+  if err1 != nil {
+    log.Fatal(err1)
+  } 
+  for _,res := range arrRes.Results {
+    size += res.Size
+  } 
+  
+  sizeMb := float32(size)/(1024*1024)
+  sizeGb := float32(size)/(1024*1024*1024)
+  fmt.Println("size : ", size, " KB, ", sizeMb, " MB, ", sizeGb, " GB")
+  
+}
+
+func getImageSize(w http.ResponseWriter, r *http.Request) {
+  // get Artifactory Connection
+  
+  // call API to get all tags for an image
+  
+  // foreach tag => call getTagSize
+
+  // return map where key = tag and value = size
+}
+
+func getRepoSize(w http.ResponseWriter, r *http.Request) {
+  // get Artifactory Connection
+
+  // call API to get all images in a repo
+  
+  // foreach image => call getImageSize
+
+  // return map of map where key = image name and value = map returned by getImageSize 
+}
+
+
+func initService() artifactory.ArtifactoryServicesManager {
+
+
+  // init log file
+  file, _ := os.Create("./service.log")
+
+  if os.Getenv("LOG_LEVEL") != "" {   
+    switch os.Getenv("LOG_LEVEL") {
+      case "ERROR": customlog.SetLogger(customlog.NewLogger(customlog.ERROR, file))
+      default: customlog.SetLogger(customlog.NewLogger(customlog.INFO, file))
+    }
+  } else {
+    customlog.SetLogger(customlog.NewLogger(customlog.INFO, file))
+  }
+
+  // check env variable for connection to Artifactory
+  if os.Getenv("ART_URL") == "" || os.Getenv("ART_USER") == "" || os.Getenv("ART_PASS") == "" {  
+   fmt.Println("ART_URL, ART_USER, ART_PASS are required environment variables !")
+    os.Exit(2)
+  } 
+
+  // set up connection to Artifactory
+  rtDetails := auth.NewArtifactoryDetails()
+  rtDetails.SetUrl(os.Getenv("ART_URL"))
+  rtDetails.SetUser(os.Getenv("ART_USER"))
+  rtDetails.SetPassword(os.Getenv("ART_PASS"))
+
+  serviceConfig, err := artifactory.NewConfigBuilder().
+    SetArtDetails(rtDetails).
+    SetDryRun(false).
+    Build()
+
+  if err != nil {
+    log.Fatal("Init service config failed with url: ", os.Getenv("ART_URL"),", user: ",os.Getenv("ART_USER"))
+  }   
+
+  art, _ := artifactory.New(&rtDetails, serviceConfig)
+
+  _, err = art.Ping()
+
+  if err != nil {
+    log.Fatal(err)
+  }   
+  
+  return *art
+}
+
+///////////////////////////////////////////////
+/////////////////// MAIN //////////////////////
+///////////////////////////////////////////////
+
 func getArtifactList(w http.ResponseWriter, r *http.Request) {
 
   var pkgs map[string][]Versioning
@@ -395,8 +526,22 @@ func test(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
+  test := true 
   router := mux.NewRouter()
-  router.HandleFunc("/{type}/{repo}/latest/{nb}", getArtifactList).Methods("GET")
-  router.HandleFunc("/test/{nb}", test).Methods("GET")
+  rtManager = initService()
+
+  if (test) {
+    params := services.NewSearchParams()
+    params.Pattern = "mygeneric-local/Carefirst.jpg"
+    params.Recursive = true
+    resultItems, _ := rtManager.SearchFiles(params)
+    fmt.Println(resultItems)
+  }
+  
+//  router.HandleFunc("/{type}/{repo}/latest/{nb}", getArtifactList).Methods("GET")
+//  router.HandleFunc("/test/{nb}", test).Methods("GET")
+  router.HandleFunc("/docker/{repo}/{image}/{tag}/size", getTagSize).Methods("GET")
+//  router.HandleFunc("/docker/{image}/size", getImageSize).Methods("GET")
+//  router.HandleFunc("/docker/{repository}/size", getRepoSize).Methods("GET")
   log.Fatal(http.ListenAndServe(":8000", router))
 }
