@@ -3,7 +3,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"encoding/json"
         "github.com/gorilla/mux"
 	"github.com/cyan21/versioning"
@@ -30,11 +29,11 @@ type Propertie struct {
 }
 
 type Result struct {
-  Path string
+  Repo string
   Properties []Propertie
 }
 
-type AQLResult struct {
+type AQLResVers struct {
   Results []Result
 }
 
@@ -84,163 +83,44 @@ func getSemVerFields(semver string) (int, int, int, string) {
   return maj, min, pat, mat 
 }
 
-func allChecked(arr []bool) bool {
-  for _, v := range arr { 
-    if !v { return false }
-  } 
-  return true
-}
+func sort(toParse []Result, propVers string, pkgType string) []Versioning {
 
-func genFileSpec(repo string, pkgList map[string]map[string][]Versioning ) {
+  versions := make ([]Versioning, len(toParse))
+ 
+  // get all versions
+  for i:=0; i < len(toParse); i++ {
 
-  fmt.Println("[genFileSpec] begin ...")
+    // use a constructor instead !!!!!
+    v := toParse[i].getPropValue(propVers)
+    maj, min, pat, mat := getSemVerFields(v)
 
-  filePattern := "{\"files\":[" 
-    
-  for pkgName, versList := range pkgList {
-
-    exclVers := ""
-
-    fmt.Println(pkgName)
-    fmt.Println(versList)
-    
-    if len(versList["keep"]) > 0 {
-
-      // loop in versions to keep/exclude 
-      for i:= 0; i < len(versList["keep"]); i++ {
-          exclVers += "\"*" + versList["keep"][i].Print() + "*\"," 
-      }
-     
-      // add file pattern and remove last coma for excluded versions list
-      filePattern += "{\"pattern\":\"" + repo + "/" + pkgName + "/*.tgz\",\"excludePatterns\": [" + exclVers[:len(exclVers) - 1]  + "]},"
-
-    } // end if
-
-  } // end for
-
-  fmt.Println(filePattern[:len(filePattern)-1] + "]}")
-
-  d1 := []byte(filePattern[:len(filePattern)-1] + "]}")
-  err := ioutil.WriteFile("/tmp/delete.filespec", d1, 0644)
-
-  if err != nil {
-        panic(err)
-  }
-
-}
-
-func parse2(toParse string, tagName string, tagVersion string, verstype string) map[string][]Versioning {
-
-  //var arrRes []Result
-  var arrRes AQLResult 
-  var pkgList = make(map[string][]Versioning)
-
-  err1 := json.Unmarshal([]byte(toParse), &arrRes)
-
-  if err1 != nil {
-    log.Fatal("Issue while unmarshalling")
-  } 
-  
-  for _,res  := range arrRes.Results {
-//   fmt.Println(res.Path) 
-
-    pkgVersion := res.getPropValue(tagVersion)
-    pkgName := res.getPropValue(tagName)
-
-    if pkgList[pkgName] == nil {
-      pkgList[pkgName] = make([]Versioning, 0, len(arrRes.Results))
-    }  
-
-    maj, min, pat, mat := getSemVerFields(pkgVersion)
-    switch verstype {
-      case "npm" : pkgList[pkgName] = append(pkgList[pkgName], SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat})
-      case "docker" : pkgList[pkgName] = append(pkgList[pkgName], SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat})
-      default: log.Fatal("[Parse2] unknow version type")
-    }
-  } // end for 
-
-  return pkgList 
-}
-
-
-func parse(toParse []byte, tagName string, tagVersion string, verstype string) map[string][]Versioning {
-
-  var arrRes AQLResult
-  var pkgList = make(map[string][]Versioning)
-
-  err1 := json.Unmarshal(toParse, &arrRes)
-
-  if err1 != nil {
-    log.Fatal("Issue while unmarshalling")
-  } 
-  
-  for _,res  := range arrRes.Results {
-
-    pkgVersion := res.getPropValue(tagVersion)
-    pkgName := res.getPropValue(tagName)
-
-    if pkgList[pkgName] == nil {
-      pkgList[pkgName] = make([]Versioning, 0, len(arrRes.Results))
-    }  
-
-// use a constructor instead !!!!!
-    maj, min, pat, mat := getSemVerFields(pkgVersion)
-
-    switch verstype {
-      case "npm" : pkgList[pkgName] = append(pkgList[pkgName], SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat})
-      case "docker" : pkgList[pkgName] = append(pkgList[pkgName], SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat})
+    switch pkgType {
+      case "docker" : versions[i] = SemVer20{Major: maj, Minor: min, Patch: pat, Maturity: mat}
       default: log.Fatal("[Parse] unknow version type")
     }
 
   } // end for 
 
-  return pkgList 
+//  fmt.Println("versions :", versions)
+
+  // sort array
+  for i:=0; i<len(versions); i++ {
+    for j:=i+1; j<len(versions); j++ {
+
+//      fmt.Println("j:", versions[j],", i:", versions[i])
+
+      if versions[j].Newer(versions[i]) == 1 { 
+//        fmt.Println("OK permute !!")
+        tmp := versions[i]
+        versions[i] = versions[j]
+        versions[j] = tmp 
+      } 
+    }
+  } 
+
+  return versions 
 }
 
-
-func sortVersion(toSort map[string][]Versioning) map[string][]Versioning {
-
-  // to return
-  sortedPkgs :=  make(map[string][]Versioning)
-  
-  // loop over package names
-  for pkgName, versions := range toSort {
-    
-    sortedPkgs[pkgName] = make([]Versioning, 0, cap(versions))
-
-    // store indices pointing to NPMSemver already sorted out
-    usedIndices := make([]bool, len(versions))
-    i := 0
-
-    // loop over package versions until all elements were sorted out
-    for !allChecked(usedIndices) {
-      
-      if !usedIndices[i] {
-        newestIndice := i 
-
-        // look for newest version 
-        for j := i + 1; j < len(versions); j++ { 
-
-          if !usedIndices[newestIndice] && !usedIndices[j] {
-            if versions[newestIndice].Newer(versions[j]) == 0 { 
-              newestIndice = j 
-            } 
-          } 
-        }
-        
-        sortedPkgs[pkgName] = append(sortedPkgs[pkgName], versions[newestIndice])
-        usedIndices[newestIndice] = true
-      } else {
-        i++
-      }// end if
- 
-    } // end loop versions
-    
-
-  } // end loop package name
-
-  return sortedPkgs
-}
 
 func genAnswer(pkgsList map[string][]Versioning, limit int) map[string]map[string][]Versioning {
 
@@ -269,27 +149,18 @@ func genAnswer(pkgsList map[string][]Versioning, limit int) map[string]map[strin
 /////////////////// REFACTO //////////////////////
 ///////////////////////////////////////////////
 
-type VersResult struct {
-  Repo string 
-  Properties []Propertie
-}
-
-type AQLResVers struct {
-  Results []VersResult
-}
-
 type SizeResult struct {
   Name string 
   Size int64
 }
 
-type AQLRes struct {
+type AQLResSize struct {
   Results []SizeResult
 }
 
 func getTagSize(w http.ResponseWriter, r *http.Request) {
 
-  var arrRes AQLRes
+  var arrRes AQLResSize
   var buffer bytes.Buffer
   var size int64 = 0
   repo := mux.Vars(r)["repo"]
@@ -408,7 +279,7 @@ func getArtifactList(w http.ResponseWriter, r *http.Request) {
   pkgType := mux.Vars(r)["type"]
   repoName := mux.Vars(r)["repo"]
   img := mux.Vars(r)["img"]
-//  var pkgs map[string][]Versioning
+//  var pkgs []Versioning
 //  limit := stringToInt(mux.Vars(r)["nb"])
 
   var propName string 
@@ -416,8 +287,8 @@ func getArtifactList(w http.ResponseWriter, r *http.Request) {
   
   switch(pkgType) {
     case "docker": 
-      propName = "@docker.repoName"
-      propVers = "@docker.manifest"
+      propName = "docker.repoName"
+      propVers = "docker.manifest"
     case "npm": 
       propName = "npm.name"
       propVers = "npm.version"
@@ -427,9 +298,9 @@ func getArtifactList(w http.ResponseWriter, r *http.Request) {
   buffer.WriteString(repoName)
   buffer.WriteString("\", \"name\":\"manifest.json\",\"path\": {\"$match\":\"")
   buffer.WriteString(img)
-  buffer.WriteString("*\"}}).include(\"repo\",\"")
+  buffer.WriteString("*\"}}).include(\"repo\",\"@")
   buffer.WriteString(propVers)
-  buffer.WriteString("\", \"")
+  buffer.WriteString("\", \"@")
   buffer.WriteString(propName)
   buffer.WriteString("\")")
 
@@ -444,50 +315,14 @@ func getArtifactList(w http.ResponseWriter, r *http.Request) {
     log.Fatal(err1)
   } 
   fmt.Println(arrRes)
-/*
-  pkgs = parse(res, propName, propVers, pkgType)
-  sortedPkgs := sortVersion(pkgs)
-//  fmt.Println(sortedPkgs)
+  pkgs := sort(arrRes.Results, propVers, pkgType)
+  fmt.Println(pkgs)
 
   // for UI
-  toSend := genAnswer(sortedPkgs,limit)
-  
-  // for deletion
-  genFileSpec(repoName, toSend)
-
-  json.NewEncoder(w).Encode(toSend)
-*/
-}
-
-
-func test(w http.ResponseWriter, r *http.Request) {
-
-  var pkgs map[string][]Versioning
-  limit := stringToInt(mux.Vars(r)["nb"])
-
-/*
-  url := "http://192.168.41.41:8081/artifactory/api/search/aql"
-  filename := "list_npm.aql"
-  login := "admin" 
-  pass := "password" 
-  fmt.Println("before AQL")
-  res := execAQL(url, filename, login, pass)
-  fmt.Println(string(res))
-*/
-
-  res := `{"results": [{"path":"/truc/chemin", "properties":[{"key": "npm.name", "value": "qotd"},{"key":"npm.version", "value": "0.0.1-alpha"}]},{"path":"/titi/batman", "properties":[{"key": "npm.name", "value": "cotd"},{"key":"npm.version","value":"0.12.0-alpha"}]},{"path":"/titi/batman", "properties":[{"key": "npm.name", "value": "qotd"},{"key":"npm.version", "value":"0.2.0-beta"}]}, {"path":"/truc/chemin2", "properties":[{"key": "npm.name", "value": "cotd"},{"key":"npm.version","value":"0.0.1-release"}]},{"path":"/truc/chemin2", "properties":[{"key": "npm.name", "value": "qotd"},{"key":"npm.version","value":"0.12.1-beta"}]}, {"path":"/truc/chemin2", "properties":[{"key": "npm.name", "value": "qotd"},{"key":"npm.version","value":"0.0.3-release"}]}]}`
-
-
-  pkgs = parse2(res, "npm.name", "npm.version", "npm")
-  fmt.Println("after parse", pkgs)	
-
-  sortedPkgs := sortVersion(pkgs)
-  fmt.Println(sortedPkgs)	
-
-  json.NewEncoder(w).Encode(genAnswer(sortedPkgs,limit))
+//  toSend := genAnswer(sortedPkgs,limit)
+  json.NewEncoder(w).Encode(pkgs)
 
 }
-
 
 func main() {
 
@@ -504,7 +339,6 @@ func main() {
   }
   
   router.HandleFunc("/{type}/{repo}/{img}/latest/{nb}", getArtifactList).Methods("GET")
-//  router.HandleFunc("/test/{nb}", test).Methods("GET")
   router.HandleFunc("/docker/{repo}/{image}/{tag}/size", getTagSize).Methods("GET")
 //  router.HandleFunc("/docker/{image}/size", getImageSize).Methods("GET")
 //  router.HandleFunc("/docker/{repository}/size", getRepoSize).Methods("GET")
